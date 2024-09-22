@@ -41,6 +41,23 @@ BCOM_bios10:
 	push hl
 	retn
 
+BCOM_play_eyecatcher:
+    ld a,$81            ;play first music track
+    call UCOM_write2buffer
+    ld a,$80
+    call UCOM_write2buffer
+
+    xor a,$FF
+    out (WRITE_68K),a    ; reply to 68k
+    out (READ_68K),a     ; clear sound code
+
+	pop iy
+	pop ix
+	pop hl
+	pop de
+	pop bc
+	pop af
+    retn
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;                 USER COMMANDS                 ;;

@@ -74,6 +74,8 @@ NMI:
 		jr z,do_nothing$
 		cp a,$01
 		jp z,BCOM_prepare_switch
+		cp a,$02
+		jp z,BCOM_play_eyecatcher
 		cp a,$03
 		jp z,BCOM_reset
 		
