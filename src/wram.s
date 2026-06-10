@@ -102,5 +102,11 @@ SFXPS_channel_taken_status:    ds 1                ; u8 (%--654321; is ADPCM-A c
 SFXPS_channel_playback_status: ds 1                ; u8 (%--654321; is ADPCM-A channel 1~6 playing? 1 = yes, 0 = no)
 SFXPS_WRAM_end:
 
-; ======== Fade system ======== 
+; ======== Fade system ========
 FADE_offset: ds 1 ; s8
+
+; ======== Pause system ========
+; 0 = normal, 1 = paused (sequencer frozen, music held at silence),
+; 2 = resuming (fading the music back in to pause_saved_mvol)
+pause_flag:        ds 1 ; u8
+pause_saved_mvol:  ds 1 ; u8 (master_volume captured at pause; fade-in target on resume)

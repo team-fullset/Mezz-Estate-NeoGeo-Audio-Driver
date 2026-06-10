@@ -13,6 +13,14 @@ MLM_irq:
 	or a,a ; cp a,0
 	call nz,MLM_stop
 
+	; While paused (pause_flag==1) freeze the sequencer: skip all event
+	; processing so the playback position is held and no notes are keyed off.
+	; do_reset_chvols was handled above, so FADE_irq's fade still rescales the
+	; held notes; FMCNT_irq/SSGCNT_irq run separately in the main loop.
+	ld a,(pause_flag)
+	cp a,1
+	ret z
+
 	ld iyl,0 ; Clear active mlm channel counter
 
 	ld c,0
@@ -449,6 +457,7 @@ MLM_stop:
 		ld (IRQ_TA_tick_base_time),a
 		ld (IRQ_TA_tick_time_counter),a
 		ld (do_stop_song),a
+		ld (pause_flag),a   ; a stop/new-song always clears pause state
 
 		; DON'T RESET PAS, this messes with SFXPS
 		call ssg_stop

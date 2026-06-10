@@ -196,6 +196,12 @@ MLM_CH_ENABLE equ (1<<MLM_CH_ENABLE_BIT)
 COM_BUFFER_LENGTH equ 32
 
 UCOM_MASK         equ %01111111
+; Command index mask. Commands run 0x00..0x0D, so a 32-entry vector table is
+; plenty; 0x0E..0x1F still dispatch to UCOM_CMD_invalid (softlock).
+UCOM_COMMAND_MASK equ %00011111
+
+; master_volume delta per fade tick when pausing/resuming (tunable by feel)
+PAUSE_FADE_STEP   equ 16
 
 ; SSG driver definitions (driver into 
 ; the driver??? change name later)

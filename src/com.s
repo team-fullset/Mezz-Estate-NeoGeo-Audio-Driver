@@ -177,9 +177,9 @@ UCOM_run_command:
         and a,UCOM_MASK
         ld b,a
 
-        ; command &= UCOM_MASK (%01111111)
+        ; command &= UCOM_COMMAND_MASK (%00011111)
         ld a,c
-        and a,UCOM_MASK
+        and a,UCOM_COMMAND_MASK
         ld c,a
 
         ; hl = &UCOM_command_vectors[command]
@@ -211,7 +211,8 @@ UCOM_command_vectors:
     dw UCOM_CMD_set_master_vol,    UCOM_CMD_set_master_vol
     dw UCOM_CMD_set_fade,          UCOM_CMD_set_fade
     dw UCOM_CMD_invalid,           UCOM_CMD_sfxps_retrig_smp
-    dup 116
+    dw UCOM_CMD_pause_song,        UCOM_CMD_resume_song      ; 0x0C, 0x0D
+    dup 18  ; pad 0x0E..0x1F (table sized to UCOM_COMMAND_MASK = 0x1F)
         dw UCOM_CMD_invalid
     edup
 
@@ -321,6 +322,50 @@ UCOM_CMD_sfxps_retrig_smp:
     pop af
     pop iy
     pop bc
+    jp UCOM_run_command_return
+
+; b: $00
+; c: $0C
+; Pause: freeze the sequencer and fade the music out, holding it at silence.
+; Notes are never keyed off, so they're preserved and resume seamlessly.
+UCOM_CMD_pause_song:
+    push af
+        ; Nothing to pause if no song is playing.
+        ld a,(MLM_is_song_playing)
+        or a,a
+        jr z,pause_ret$
+
+        ; Capture the song's master volume only on a fresh pause (pause_flag==0),
+        ; so re-pausing mid-resume keeps the original fade-in target.
+        ld a,(pause_flag)
+        or a,a
+        jr nz,pause_set$
+            ld a,(master_volume)
+            ld (pause_saved_mvol),a
+pause_set$:
+        ld a,1
+        ld (pause_flag),a
+        ld a,-PAUSE_FADE_STEP
+        ld (FADE_offset),a
+pause_ret$:
+    pop af
+    jp UCOM_run_command_return
+
+; b: $00
+; c: $0D
+; Resume: fade the held music back in to its saved volume and unfreeze.
+UCOM_CMD_resume_song:
+    push af
+        ; Only meaningful while in a pause cycle.
+        ld a,(pause_flag)
+        or a,a
+        jr z,resume_ret$
+        ld a,2
+        ld (pause_flag),a
+        ld a,PAUSE_FADE_STEP
+        ld (FADE_offset),a
+resume_ret$:
+    pop af
     jp UCOM_run_command_return
 
 UCOM_CMD_invalid:
