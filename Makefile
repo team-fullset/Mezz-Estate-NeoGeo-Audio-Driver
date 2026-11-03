@@ -11,7 +11,7 @@ TEST_PATH := test
 
 build: LUT
 	$(ZASM) -i $(SRC_MAIN) -o $(SRC_OUT).tmp -uwy -l ./$(LIST_PATH)
-	$(DD) if=./$(SRC_OUT).tmp of=./$(SRC_OUT) bs=1024 count=24
+	$(DD) if=./$(SRC_OUT).tmp of=./$(SRC_OUT) bs=1024 count=26
 	$(RM) $(SRC_OUT).tmp
 
 LUT:

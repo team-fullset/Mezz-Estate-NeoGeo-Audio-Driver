@@ -14,7 +14,7 @@
 #data WRAM,$F800,$800
 	include "wram.s"
 
-#code DRIVER_CODE,$0000,$6000
+#code DRIVER_CODE,$0000,$6800
 	;org $0000
 j_startup:
 	di
@@ -156,31 +156,17 @@ main_loop$:
 	;bit 1,a
 	;call nz,execute_tmb_tick
 
-	; Check the timer A flag, if so 
-	; execute tma based function
+	; Reset the timer A flag before the tick, so a slow tick leaves the next one pending
 	in a,(4)
 	bit 0,a
-	call nz,execute_tma_tick
+	jr z,no_tick$
+	ld de,REG_TIMER_CNT<<8 | %00010101
+	rst RST_YM_WRITEA
+	call execute_tma_tick
+no_tick$:
 
 	call UCOM_handle_command
 	call SFXPS_update
-
-	; If at least one timer has expired, set all the 
-	; load counter and reset flags flags. Even if 
-	; the load counter flag of an unexpired timer has 
-	; been set, nothing will happen. The load counter 
-	; flag only works when the timer counter is 0.
-	ld a,(has_a_timer_expired)
-	or a,a ; cp a,0
-	jr z,main_loop$ ; if no timer has expired, continue
-
-	; Loads load counter, enables interrupts 
-	; and resets flags of timer A and B.
-	ld e,%00010101
-	ld d,REG_TIMER_CNT
-	rst RST_YM_WRITEA
-	xor a,a ; ld a,0
-	ld (has_a_timer_expired),a
 	jr main_loop$
 
 ; Only backs up AF

@@ -39,9 +39,8 @@ SSGCNT_noise_tune:		ds 1                   ; u8
 SSGCNT_channel_enable:	ds SSG_CHANNEL_COUNT   ; bool[3]
 SSGCNT_notes:			ds SSG_CHANNEL_COUNT   ; u8[3]
 SSGCNT_pitch_ofs:       ds SSG_CHANNEL_COUNT*2 ; s16[3]
-SSGCNT_pitch_slide_ofs: ds SSG_CHANNEL_COUNT*2 ; s16[3]
-SSGCNT_pitch_slide_clamp: ds SSG_CHANNEL_COUNT*2 ; u16[3] bit 15: custom clamp enable, bit 14: clamp direction (0: below, 1: above)
-SSGCNT_buffered_note:   ds SSG_CHANNEL_COUNT ; u8[3] Used to avoid issues with multiple clamped slides effects in a row.
+SSGCNT_slides:          ds SSG_CHANNEL_COUNT*SLIDE.SIZE
+SSGCNT_vol_raw:         ds SSG_CHANNEL_COUNT   ; bool[3] volume set after the volume macro ended
 
 ; IF THE ORDER OF THESE MACROS IS 
 ; CHANGED THEN "MLM_set_instrument_ssg"
@@ -70,6 +69,7 @@ FM_ch1: ds FM_Channel.SIZE
 FM_ch2: ds FM_Channel.SIZE
 FM_ch3: ds FM_Channel.SIZE
 FM_ch4: ds FM_Channel.SIZE
+FM_loaded_instruments: ds FM_CHANNEL_COUNT ; u8[FM_CH_COUNT] (instrument + 1 whose patch is in the chip, 0 if none)
 
 FM_wram_end:
 

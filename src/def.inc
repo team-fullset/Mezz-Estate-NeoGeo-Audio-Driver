@@ -7,7 +7,7 @@ BANK0       equ $F000
 WRAM_START  equ $F800
 WRAM_END    equ $FFFF
 
-MLM_HEADER  equ FIXED+$6000
+MLM_HEADER  equ FIXED+$6800
 MLM_SONG2   equ BANK3
 INSTRUMENTS equ BANK2
 OTHER_DATA  equ BANK1
@@ -219,8 +219,6 @@ FMCNT_CH_ENABLE            equ 1
 FMCNT_VOL_UPDATE           equ 2
 FMCNT_PITCH_SLIDE_ENABLE   equ 4
 
-FMCNT_MIN_FNUM equ $0080
-FMCNT_MAX_FNUM equ $07FF
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;                    MACROS                    ;;
@@ -344,12 +342,25 @@ ControlMacro.SIZE    equ 8
 
 FM_Channel.lramspms:   equ 0  ; u8 (LRAA-PPP; Left & Right, Ams, Pms)
 FM_Channel.op_enable:  equ 1  ; u8 (4321----; op 4 enable; op 3 enable; op 2 enable; op 1 enable)
-FM_Channel.frequency:  equ 2  ; u16 (--BBBFFF'FFFFFFFF; Block, F-Num 2 & 1)
+FM_Channel.fnum:       equ 2  ; u16 (--BBBFFF'FFFFFFFF; Block, F-Num, before the pitch macro)
 FM_Channel.volume:     equ 4  ; u8 (0 is lowest, 127 is highest)
+FM_Channel.reg:        equ 7  ; u16 (the F-Num last written, the pitch macro is added to it)
 FM_Channel.enable:     equ 5  ; u8 (%0000'00VE; update Volume; Enable Channel. every update flag is cleared every tick)
 FM_Channel.algo:       equ 6  ; u8 (Stored multiplied by 2, thus shifted to the left once; ----AAA-)
-FM_Channel.pslide_ofs: equ 7  ; s16
-FM_Channel.pitch_ofs:  equ 9  ; s16
-FM_Channel.fnum_clamp: equ 11 ; u16 bit 15: custom clamp enable, bit 14: clamp direction (0: below, 1: above)
-FM_Channel.bufrd_note: equ 13 ; u8 (Used to avoid glitches with chains of clamped slide effects)
-FM_Channel.SIZE        equ 13+3 ; size + padding
+FM_Channel.slide:      equ 7  ; SLIDE (target at 11, speed at 14, flags at 15; acc is unused)
+FM_Channel.pitch_ofs:  equ 9  ; s16 (pitch macro offset, F-Num units)
+FM_Channel.bufrd_note: equ 13 ; u8
+FM_Channel.SIZE        equ 16
+
+; Pitch slide state, in register units as DefleMask slides: FM moves
+; the block/F-Num word, SSG moves an offset to the note's period.
+SLIDE.acc:    equ 0 ; s16 SSG: period offset from the note
+SLIDE.target: equ 4 ; u16 FM: block/F-Num word, SSG: period offset
+SLIDE.speed:  equ 7 ; u8 per tick
+SLIDE.flags:  equ 8 ; u8 (%-----DTA; Decreasing, has Target, Active)
+SLIDE.SIZE:   equ 9
+
+; F-Num window of one octave: slides that reach an edge continue in
+; the neighbouring octave from its other edge.
+FMCNT_FNUM_LO equ $269
+FMCNT_FNUM_HI equ $4D2

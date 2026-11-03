@@ -182,3 +182,87 @@ shift_right_hl_by_b:
   rr l
   djnz shift_right_hl_by_b
   ret
+
+; ix: SLIDE data (SSG)
+; Moves the period offset by the speed towards the target
+; (stopping there), or without a target up to +-$1000.
+PITCH_slide_step:
+	bit 0,(ix+SLIDE.flags)
+	ret z
+	push af
+	push de
+	push hl
+		ld l,(ix+SLIDE.acc+0)
+		ld h,(ix+SLIDE.acc+1)
+		ld e,(ix+SLIDE.speed)
+		ld d,0
+		bit 2,(ix+SLIDE.flags)
+		jr nz,down$
+		add hl,de
+		jr moved$
+down$:
+		or a,a
+		sbc hl,de
+moved$:
+		bit 1,(ix+SLIDE.flags)
+		jr z,no_target$
+
+		; Reached if (offset - target) >= 0 going up,
+		; (target - offset) >= 0 going down
+		ld e,(ix+SLIDE.target+0)
+		ld d,(ix+SLIDE.target+1)
+		push hl
+			bit 2,(ix+SLIDE.flags)
+			jr z,compare$
+			ex de,hl
+compare$:
+			or a,a
+			sbc hl,de
+		pop hl
+		jp m,store$
+		ld l,(ix+SLIDE.target+0)
+		ld h,(ix+SLIDE.target+1)
+		jr stop$
+
+no_target$:
+		; Stop at +-$1000
+		ld a,h
+		bit 7,a
+		jr nz,negative$
+		cp a,$10
+		jr c,store$
+		ld h,$10
+		ld l,0
+		jr stop$
+negative$:
+		cp a,$F0
+		jr nc,store$
+		ld h,$F0
+		ld l,0
+stop$:
+		ld (ix+SLIDE.flags),0
+store$:
+		ld (ix+SLIDE.acc+0),l
+		ld (ix+SLIDE.acc+1),h
+	pop hl
+	pop de
+	pop af
+	ret
+
+; hl: pitch (signed)
+; de: maximum
+; [OUTPUT]
+;   hl: pitch clamped to 0~de
+PITCH_clamp:
+	bit 7,h
+	jr z,positive$
+	ld hl,0
+	ret
+positive$:
+	push hl
+		or a,a
+		sbc hl,de
+	pop hl
+	ret c
+	ld hl,de
+	ret

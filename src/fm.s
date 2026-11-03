@@ -90,7 +90,6 @@ loop$:
 		call nz,FMCNT_update_total_levels
 
 		call FMCNT_update_frequency
-		call FMCNT_update_pslide
 
 		; Clear all the update bitflags
 		ld a,(ix+FM_Channel.enable)
@@ -107,78 +106,22 @@ skip_loop$:
 ; b:  channel (0~3)
 ; ix: address to FMCNT channel data
 ; DOESN'T BACKUP HL AND DE
-;  Adds frequency and pitch offset together
-;  and sets the YM2610 registers
+;  Steps the pitch slide, then writes the F-Num plus the pitch macro
 FMCNT_update_frequency:
 	push af
 		push bc
-			ld a,(ix+FM_Channel.frequency+1)
-			and a,%00111000 ; Mask out F-Num to get the Block
-			ld b,a
-
-			; Offset frequency
-			ld e,(ix+FM_Channel.frequency+0)
-			ld d,(ix+FM_Channel.frequency+1)
-			ex hl,de
+			call FMCNT_slide_step
+			jr c,keep_register$
+			ld a,(ix+FM_Channel.fnum+0)
+			ld (ix+FM_Channel.reg+0),a
+			ld a,(ix+FM_Channel.fnum+1)
+			ld (ix+FM_Channel.reg+1),a
+keep_register$:
+			ld l,(ix+FM_Channel.reg+0)
+			ld h,(ix+FM_Channel.reg+1)
 			ld e,(ix+FM_Channel.pitch_ofs+0)
 			ld d,(ix+FM_Channel.pitch_ofs+1)
 			add hl,de
-
-			; Clamp frequency floor
-			;   if custom clamp disabled or custom clamp
-			;   is a ceil clamp, use default value
-			bit 7,(ix+FM_Channel.fnum_clamp+1)
-			jp z,default_floor_clamp$
-			bit 6,(ix+FM_Channel.fnum_clamp+1)
-			jp nz,default_floor_clamp$ ; custom clamp is ceil...
-
-			; Custom floor clamp
-			ld a,(ix+FM_Channel.fnum_clamp+1)
-			and a,%00000111 ; Get fnum minimum
-			or a,b 
-			ld d,a
-			ld e,(ix+FM_Channel.fnum_clamp)
-			or a,a
-			sbc hl,de
-			add hl,de
-			jp nc,no_floor_clamp$ ; if hl >= MIN_FNUM...
-
-			; if the freq is below the custom floor,
-			; clear the pitch slide offset...
-			xor a,a
-			ld (ix+FM_Channel.pslide_ofs+0),a
-			ld (ix+FM_Channel.pslide_ofs+1),a
-
-			; ...fix the value and skip the ceil clamp test
-			ld hl,de
-			jp no_ceil_clamp$
-
-no_floor_clamp$:
-			; Clamp frequency ceiling
-			;   if custom clamp disabled or custom clamp
-			;   is a ceil clamp, use default value
-			bit 7,(ix+FM_Channel.fnum_clamp+1)
-			jp z,default_ceil_clamp$
-			bit 6,(ix+FM_Channel.fnum_clamp+1)
-			jp z,default_ceil_clamp$ ; custom clamp is floor...
-
-			; Custom ceiling clamp
-			ld a,(ix+FM_Channel.fnum_clamp+1)
-			and a,%00000111 ; Get fnum minimum
-			or a,b 
-			ld d,a
-			ld e,(ix+FM_Channel.fnum_clamp)
-			or a,a
-			sbc hl,de
-			add hl,de
-			jp c,no_ceil_clamp$ ; if hl < MAX_FNUM...
-
-			; clear the pitch slide offset...
-			xor a,a
-			ld (ix+FM_Channel.pslide_ofs+0),a
-			ld (ix+FM_Channel.pslide_ofs+1),a
-			ld hl,de
-no_ceil_clamp$:
 		pop bc
 
 		; Write frequency to registers
@@ -189,7 +132,7 @@ no_ceil_clamp$:
 		add a,REG_FM_CH13_FBLOCK
 
 		; Write to Block & F-Num 2 register
-		ld e,h 
+		ld e,h
 		ld d,a
 		bit 1,b
 		call z,port_write_a
@@ -198,7 +141,7 @@ no_ceil_clamp$:
 		; Write to F-Num 1 register
 		ld a,-4  ; \
 		add a,d  ; | d -= 4
-		ld d,a   ; / 
+		ld d,a   ; /
 		ld e,l
 		bit 1,b
 		call z,port_write_a
@@ -206,53 +149,200 @@ no_ceil_clamp$:
 	pop af
 	ret
 
-default_floor_clamp$:
-	ld a,b
-	or a,FMCNT_MIN_FNUM >> 8
-	ld d,a
-	ld e,FMCNT_MIN_FNUM & $FF
-	or a,a
-	sbc hl,de
-	add hl,de
-	jp nc,no_floor_clamp$ ; if hl >= MIN_FNUM...
-	
-	xor a,a
-	ld (ix+FM_Channel.pslide_ofs+0),a
-	ld (ix+FM_Channel.pslide_ofs+1),a
-	ld hl,de
-	jp no_ceil_clamp$
-
-default_ceil_clamp$:
-	ld a,b
-	or a,FMCNT_MAX_FNUM >> 8
-	ld d,a
-	ld e,FMCNT_MAX_FNUM & $FF
-	or a,a
-	sbc hl,de
-	add hl,de
-	jp c,no_ceil_clamp$ ; if hl < MAX_FNUM...
-
-	xor a,a
-	ld (ix+FM_Channel.pslide_ofs+0),a
-	ld (ix+FM_Channel.pslide_ofs+1),a
-	ld hl,de
-	jp no_ceil_clamp$
-
 ; ix: address to FMCNT channel data
-; b:  channel (0~3)
-; DOESN'T BACKUP AF, HL AND DE
-; Adds the pitch slide offset to
-; the pitch offset
-FMCNT_update_pslide:
-	ld e,(ix+FM_Channel.pitch_ofs+0)
-	ld d,(ix+FM_Channel.pitch_ofs+1)
-	ex hl,de
-	ld e,(ix+FM_Channel.pslide_ofs+0)
-	ld d,(ix+FM_Channel.pslide_ofs+1)
+; [OUTPUT]
+;   carry: set if the register keeps its value this tick
+; DOESN'T BACKUP AF, BC, DE AND HL
+;  Moves the F-Num by the slide speed. Reaching or starting from an
+;  edge of the octave window moves to the neighbouring octave's other
+;  edge instead, without writing the register that tick.
+FMCNT_slide_step:
+	bit 0,(ix+FM_Channel.slide+SLIDE.flags)
+	jr nz,active$
+	scf ; no slide: the register keeps what the note or slide last wrote
+	ret
+active$:
+	ld l,(ix+FM_Channel.fnum+0)
+	ld a,(ix+FM_Channel.fnum+1)
+	ld c,a
+	and a,%00000111
+	ld h,a                 ; hl = F-Num
+	ld a,c
+	and a,%00111000
+	ld c,a                 ; c = block << 3
+	ld e,(ix+FM_Channel.slide+SLIDE.speed)
+	ld d,0
+	bit 2,(ix+FM_Channel.slide+SLIDE.flags)
+	jr nz,down$
+
 	add hl,de
-	ex hl,de
-	ld (ix+FM_Channel.pitch_ofs+0),e
-	ld (ix+FM_Channel.pitch_ofs+1),d
+	push hl
+		ld de,FMCNT_FNUM_HI
+		or a,a
+		sbc hl,de
+	pop hl
+	jr c,moved$
+	ld a,c
+	cp a,7<<3
+	jr z,ceiling$
+	add a,1<<3
+	ld c,a
+	ld hl,FMCNT_FNUM_LO
+	jr edge$
+
+down$:
+	or a,a
+	sbc hl,de
+	jr c,down_edge$
+	push hl
+		ld de,FMCNT_FNUM_LO+1
+		or a,a
+		sbc hl,de
+	pop hl
+	jr nc,moved$
+down_edge$:
+	ld a,c
+	or a,a
+	jr z,floor$
+	sub a,1<<3
+	ld c,a
+	ld hl,FMCNT_FNUM_HI
+
+edge$:
+	call store$
+	call target$
+	ret nc
+hold$:
+	scf
+	ret
+
+moved$:
+	call store$
+	call target$
+	or a,a
+	ret
+
+	; The lowest and highest octaves end a slide at their
+	; edge. A new slide from the lowest edge goes to F-Num 1.
+	; (DefleMask)
+ceiling$:
+	ld hl,FMCNT_FNUM_HI
+	call store$
+	ld (ix+FM_Channel.slide+SLIDE.flags),0
+	scf
+	ret
+floor$:
+	ld l,(ix+FM_Channel.fnum+0)
+	ld a,(ix+FM_Channel.fnum+1)
+	and a,%00000111
+	ld h,a
+	push hl
+		ld de,FMCNT_FNUM_LO+1
+		or a,a
+		sbc hl,de
+	pop hl
+	jr c,below_edge$
+	ld hl,FMCNT_FNUM_LO
+	call store$
+	ld (ix+FM_Channel.slide+SLIDE.flags),0
+	scf
+	ret
+below_edge$:
+	push hl
+		ld de,FMCNT_FNUM_LO
+		or a,a
+		sbc hl,de
+	pop hl
+	jr z,below_edge_hold$
+	ld hl,1
+	call store$
+	or a,a
+	ret
+below_edge_hold$:
+	ld hl,1
+	call store$
+	scf
+	ret
+
+
+store$:
+	ld a,h
+	or a,c
+	ld (ix+FM_Channel.fnum+1),a
+	ld (ix+FM_Channel.fnum+0),l
+	ld h,a
+	ret
+
+	; hl: new F-Num word. If the slide has a target it has
+	; reached, the F-Num becomes the target and the slide
+	; stops; carry is cleared then.
+target$:
+	bit 1,(ix+FM_Channel.slide+SLIDE.flags)
+	jr z,no_target$
+	ld e,(ix+FM_Channel.slide+SLIDE.target+0)
+	ld d,(ix+FM_Channel.slide+SLIDE.target+1)
+	bit 2,(ix+FM_Channel.slide+SLIDE.flags)
+	jr z,cmp$
+	ex de,hl
+cmp$:
+	call FMCNT_pitch_cmp   ; carry: hl below de
+	jr c,no_target$
+	ld a,(ix+FM_Channel.slide+SLIDE.target+0)
+	ld (ix+FM_Channel.fnum+0),a
+	ld a,(ix+FM_Channel.slide+SLIDE.target+1)
+	ld (ix+FM_Channel.fnum+1),a
+	ld (ix+FM_Channel.slide+SLIDE.flags),0
+	or a,a
+	ret
+no_target$:
+	scf
+	ret
+
+; hl, de: block/F-Num words
+; [OUTPUT]
+;   carry: set if hl is lower in pitch than de
+; DOESN'T BACKUP AF
+FMCNT_pitch_cmp:
+	push bc
+	push hl
+	push de
+		ld a,h
+		and a,%00111000
+		ld b,a
+		ld a,d
+		and a,%00111000
+		sub a,b              ; a = (de block - hl block) * 8
+		ld c,a
+		ld a,h
+		and a,%00000111
+		ld h,a
+		ld a,d
+		and a,%00000111
+		ld d,a
+		ld a,c
+		or a,a
+		jr z,same$
+		cp a,1<<3
+		jr z,de_one_up$
+		cp a,-1<<3
+		jr z,hl_one_up$
+		rla                  ; two or more octaves apart: the block decides
+		ccf
+		jr return$
+de_one_up$:
+		ex de,hl
+		add hl,hl
+		ex de,hl
+		jr same$
+hl_one_up$:
+		add hl,hl
+same$:
+		or a,a
+		sbc hl,de
+return$:
+	pop de
+	pop hl
+	pop bc
 	ret
 
 ; b:  channel (0~3)
@@ -704,33 +794,23 @@ FMCNT_set_note:
 		; Store new note in WRAM buffer
 		ld a,iyh ; load note in a
 		ld (ix+FM_Channel.bufrd_note),a
+		call FMCNT_note_to_fnum
+		ld (ix+FM_Channel.fnum+0),l
+		ld (ix+FM_Channel.fnum+1),h
+		ld (ix+FM_Channel.reg+0),l
+		ld (ix+FM_Channel.reg+1),h
+		ld b,h
+		ld c,l
 
-		; Load base pitch from FMCNT_pitch_LUT in bc
-		and a,$0F ; -OOONNNN -> 0000NNNN; Get note
-		ld l,a
-		ld h,0
-		ld de,FMCNT_pitch_LUT
-		add hl,hl
-		add hl,de
-		ld c,(hl)
-		inc hl
-		ld b,(hl)
-
-		; Set block/octave
-		ld a,iyh
-		and a,%01110000 ; Get octave (-OOONNNN -> 0OOO0000)
-		srl a           ; Get octave in the right position (block needs to be set to octave)
-		or a,b          ; OR block with F-Num 2
-		ld b,a
-
-		; Store pitch in WRAM
-		ld (ix+FM_Channel.frequency+0),c ; F-Num 1
-		ld (ix+FM_Channel.frequency+1),b ; Block and F-Num 2
-
-		; Reset pitch offset
-		xor a,a ; ld a,0
+		; A new note starts without the pitch macro offset. A pitch
+		; slide keeps going, a slide towards a note stops.
+		xor a,a
 		ld (ix+FM_Channel.pitch_ofs+0),a
 		ld (ix+FM_Channel.pitch_ofs+1),a
+		bit 1,(ix+FM_Channel.slide+SLIDE.flags)
+		jr z,keep_slide$
+		ld (ix+FM_Channel.slide+SLIDE.flags),a
+keep_slide$:
 
 		; WRITE TO REGISTERS DIRECTLY DO NOT BUFFER IN WRAM FOR NO ABSOLUTE REASON
 		; Write Block and F-Num 2 
@@ -760,82 +840,57 @@ even_channel:
 	pop hl
 	ret
 
-; [INPUT]
-;   d: note (%-OOONNNN Octave; Note)
-;   e: block
+; a: note (-OOONNNN; Octave, Note)
 ; [OUTPUT]
-;   hl: note's pitch
+;   hl: block/F-Num word. C is the top of the octave below, as in
+;       DefleMask, so slides from it start one octave down.
 ; DOESN'T BACKUP AF
-; To convert an FM pitch from block to block-1,
-; multiply the FNum by 2, and viceversa.
-FMCNT_get_note_with_block:
-	push bc
-		; Load note in c and octave in b
-		ld a,d
+FMCNT_note_to_fnum:
+	push de
+		ld d,a
 		and a,$0F
-		ld c,a
+		ld e,a
 		ld a,d
 		and a,%01110000
-		rrca ; -\
-		rrca ;  | 0OOO0000 >> 00000OOO
-		rrca ;  /
-		rrca ; /
-		ld b,a
-
-		; Load FNum in hl
-		push bc
-			ld hl,FMCNT_pitch_LUT
-			ld b,0
-			add hl,bc
-			add hl,bc
-			ld c,(hl)
-			inc hl
-			ld b,(hl)
-			ld hl,bc
-		pop bc
-
-		; If the octave and block are equal, return.
-		; If the octave is bigger than the block, 
-		; shift FNum to the left until they're equal.
-		; If the opposite is true, do the same but
-		; shift FNum to the right.
-		ld a,b
-		cp a,e
-		jp z,equal_block$      ; if equal...
-		jp nc,lower_block$ ; if octave > block...
-
-		; Else (octave < block)...
-higher_block$:
-		srl_hl ; shift hl to the right until octave == block
-		inc a
-		cp a,e 
-		jp nz,higher_block$
-
-equal_block$:
-		; OR the block and the FNum to obtain the final pitch
-		rlca
-		rlca
-		rlca
-		or a,h
+		rrca             ; block << 3
+		ld d,a
+		ld a,e
+		or a,a
+		jr nz,lookup$
+		ld a,d
+		or a,a
+		jr z,lookup$
+		sub a,1<<3
+		or a,FMCNT_FNUM_HI >> 8
 		ld h,a
-	pop bc
+		ld l,FMCNT_FNUM_HI & $FF
+		jr return$
+lookup$:
+		ld l,e
+		ld h,0
+		add hl,hl
+		push bc
+			ld bc,FMCNT_pitch_LUT
+			add hl,bc
+			ld a,(hl)
+			inc hl
+			ld h,(hl)
+			ld l,a
+		pop bc
+		ld a,h
+		or a,d
+		ld h,a
+return$:
+	pop de
 	ret
-
-lower_block$:
-	add hl,hl ; shift hl to the left until octave == block
-	dec a
-	cp a,e
-	jp nz,lower_block$
-	jp equal_block$	
 
 ; Compatible with deflemask
 ; octave 0 = block 0, etc...
 FMCNT_pitch_LUT:
-	;  C     C#    D     D#    E     F     F#    G     
-	dw $269, $28E, $2B5, $2DE, $30A, $338, $369, $39D 
+	;  C     C#    D     D#    E     F     F#    G
+	dw $269, $28E, $2B5, $2DE, $30A, $338, $369, $39D
 	;  G#    A     A#    B
-	dw $3D4, $40E, $44C, $48D, $48D, $48D, $48D, $48D
-	; 
+	dw $3D4, $40E, $44C, $48D
 
 ; c: channel
 FMCNT_stop_channel:

@@ -48,7 +48,6 @@ channel_loop$:
 	dec b
 	call SSGCNT_update_volume
 	call SSGCNT_update_note
-	call SSGCNT_update_pitch_ofs
 	call SSGCNT_update_channels_mix
 	inc b
 	djnz channel_loop$
@@ -122,6 +121,13 @@ SSGCNT_get_ym2610_ch_volume:
 		add hl,de
 		ld c,(hl)
 
+		; Set after the volume macro ended: used as is
+		ld hl,SSGCNT_vol_raw
+		add hl,de
+		ld a,(hl)
+		or a,a
+		jr nz,return$
+
 		; Calculate pointer to the
 		; channel's volume macro (ix)
 		ld ixl,b
@@ -167,26 +173,42 @@ return$:
 	ret
 
 ; b: channel (0~2)
+;  Steps the pitch slide, then writes the period of the note (plus
+;  the arpeggio macro) plus the slide and macro offsets
 SSGCNT_update_note:
 	push hl
 	push de
 	push af
 	push ix
-		; Load SSGCNT_notes[channel]
-		; into l
+	push bc
+		; Step the slide, keep its offset on the stack
+		ld a,b
+		add a,a
+		add a,a
+		add a,a
+		add a,b
+		ld e,a
+		ld d,0
+		ld ix,SSGCNT_slides
+		add ix,de
+		call PITCH_slide_step
+		ld e,(ix+SLIDE.acc+0)
+		ld d,(ix+SLIDE.acc+1)
+		ld c,(ix+SLIDE.flags)
+		push de
+
+		; Note plus the arpeggio macro
 		ld hl,SSGCNT_notes
 		ld e,b
 		ld d,0
 		add hl,de
-		ld l,(hl)
-
-		; Wrap l inbetween 0 and 127
-		ld a,l
+		ld a,(hl)
 		and a,$7F
 		ld l,a
 
-		; Calculate pointer to
-		; arpeggio macro
+		; A pitch slide holds the arpeggio macro back (DefleMask)
+		bit 0,c
+		jr nz,macro_is_disabled$
 		ld ixl,b
 		ld ixh,0
 		ld de,SSGCNT_arp_macro_A
@@ -194,67 +216,28 @@ SSGCNT_update_note:
 		add ix,ix ; | ix *= 8
 		add ix,ix ; /
 		add ix,de
-
-		; If the macro is disabled (enable = $00), 
-		; just use the value in SSGCNT_notes[channel]
-		xor a,a ; ld a,0
+		xor a,a
 		cp a,(ix+ControlMacro.enable)
 		jr z,macro_is_disabled$
-		
-		; Else (the macro is enabled) add to
-		; the value in SSGCNT_notes[channel]
-		; the macro's current value (signed addition)
-		call BMACRO_read ; Load macro value in a
+		call BMACRO_read
 		add a,l
 		ld l,a
-		;ld ixl,a
-
 macro_is_disabled$:
-		; Load tune from LUT into hl
-		ld h,0
-		ld de,SSGCNT_note_LUT
-		add hl,hl
+		call SSGCNT_note_period
+		ex de,hl
+		pop de
 		add hl,de
-		ld e,(hl)
-		inc hl
-		ld d,(hl)
-		ex hl,de
-
-		; Load pitch ofs from WRAM into de
 		ld ix,SSGCNT_pitch_ofs
-		ld d,0
 		ld e,b
+		ld d,0
 		add ix,de
 		add ix,de
 		ld e,(ix+0)
 		ld d,(ix+1)
-		add hl,de ; Add offset to loaded pitch
+		add hl,de
+		ld de,$0FFF
+		call PITCH_clamp
 
-		; Check if custom clamp is enabled, if that's the
-		; case, use custom clamp routine
-		ld ix,SSGCNT_pitch_slide_clamp
-		ld d,0
-		ld e,b
-		add ix,de
-		add ix,de
-		bit 7,(ix+1)
-		jp nz,custom_clamp$
-
-		; Check for underflow (upward pitch slide)
-		;   SSG tune values go inbetween $0000 and $0FFF,
-		;   if the most significant nibble isn't 0, then
-		;   an over/underflow has happened. Assume an 
-		;   underflow happened for now.
-		ld a,h
-		rrca      ; \
-		rrca      ;  \
-		rrca      ;  | a >>= 4
-		rrca      ;  /
-		and a,$0F ; /
-		or a,a    ; cp a,0
-		jp nz,solve_over_and_underflow$
-
-solve_under_and_over_flow_return$:
 		; Load coarse tune and write
 		; it to correct register
 		ld a,REG_SSG_CHA_COARSE_TUNE
@@ -269,178 +252,36 @@ solve_under_and_over_flow_return$:
 		dec d
 		ld e,l
 		rst RST_YM_WRITEA
+	pop bc
 	pop ix
 	pop af
 	pop de
 	pop hl
 	ret
 
-; [INPUT]
-;   hl: pitch offset
-;   de: channel
+; l: note (an arpeggio below the lowest note or above
+;    the highest one clamps to it)
 ; [OUTPUT]
-;   hl: clamped pitch offset
-;   d: pitch slide offset MSB
-solve_over_and_underflow$:
-	; Load pitch slide offset MSB
-	push hl
-		ld hl,SSGCNT_pitch_slide_ofs+1
-		add hl,de
-		add hl,de
-		ld d,(hl)
-	pop hl
-
-	; If pitch slide offset is 
-	; positive, solve overflow
-	bit 7,d
-	jp z,solve_overflow$
-
-	; Else, solve underflow
-	ld hl,$0000
-	jp solve_under_and_over_flow_return$
-
-solve_overflow$:
-	ld hl,$0FFF
-	jp solve_under_and_over_flow_return$
-
-; [INPUT]
-;   hl: pitch 
-;   de: channel
-;   ix: pitch slide clamp address
-; [OUTPUT]
-;   hl: clamped pitch 
-;   REGISTER DE ISNT BACKED UP
-;   TO REFACTOR
-;   TO FIX: REDIRECT TO DEFAULT CLAMP IF CLAMP LIMIT IS 0
-custom_clamp$:
-	; if custom clamp is a clamp on the minimum 
-	; value, use default limit
-	bit 6,(ix+1)
-	jp nz,default_overflow$
-
-	; if pitch < limit: skip to underflow check
-	ld de,$0FFF ; DEFAULT
-	or a,a ; clear carry flag
-	sbc hl,de
+;   de: period
+; DOESN'T BACKUP AF AND HL
+SSGCNT_note_period:
+	ld a,l
+	bit 7,a
+	jr z,positive$
+	xor a,a
+positive$:
+	cp a,84
+	jr c,in_range$
+	ld a,83
+in_range$:
+	ld l,a
+	ld h,0
+	add hl,hl
+	ld de,SSGCNT_note_LUT
 	add hl,de
-	jp c,custom_underflow$
-
-	; clamp result and reset pslide offset
-	ld hl,de
-	ld ix,SSGCNT_pitch_slide_ofs
-	ld e,b
-	ld d,0
-	add ix,de
-	add ix,de
-	ld (ix+0),d
-	ld (ix+1),d
-	jp solve_under_and_over_flow_return$
-
-default_overflow$:
-	; Load maximum clamp value in de
-	ld e,(ix+0)
-	ld a,(ix+1)
-	and a,%00001111 ; clear flags
-	ld d,a
-	
-	; if pitch < limit: skip to underflow check
-	or a,a ; clear carry flag
-	sbc hl,de
-	add hl,de
-	jp c,custom_underflow$
-	
-	; clamp result and reset pslide offset
-	ld hl,de
-	ld ix,SSGCNT_pitch_slide_ofs
-	ld e,b
-	ld d,0
-	add ix,de
-	add ix,de
-	ld (ix+0),d
-	ld (ix+1),d
-	jp solve_under_and_over_flow_return$
-
-custom_underflow$:
-	; else, solve underflow
-	;   if custom clamp is a clamp on the maximum
-	;   value, use default overflow handler
-	bit 6,(ix+1)
-	jp z,default_underflow$
-
-	ld de,$0000
-	or a,a ; clear carry flag
-	sbc hl,de
-	add hl,de
-	jp nc,solve_under_and_over_flow_return$
-
-	; clamp result and reset pslide offset
-	ld hl,de
-	ld ix,SSGCNT_pitch_slide_ofs
-	ld e,b
-	ld d,0
-	add ix,de
-	add ix,de
-	ld (ix+0),d
-	ld (ix+1),d
-	jp solve_under_and_over_flow_return$
-
-default_underflow$:
-	; Load minimum clamp value in de
-	ld e,(ix+0)
-	ld a,(ix+1)
-	and a,%00001111 ; clear flags
-	ld d,a
-	
-	; if pitch >= limit: return
-	or a,a ; clear carry flag
-	sbc hl,de
-	add hl,de
-	jp nc,solve_under_and_over_flow_return$
-	
-	; clamp result and reset pslide offset
-	ld hl,de
-	ld ix,SSGCNT_pitch_slide_ofs
-	ld e,b
-	ld d,0
-	add ix,de
-	add ix,de
-	ld (ix+0),d
-	ld (ix+1),d
-	jp solve_under_and_over_flow_return$
-
-; b: channel (0~2)
-SSGCNT_update_pitch_ofs:
-	push ix
-	push de
-	push hl
-		; Load pitch slide offset in hl
-		ld ix,SSGCNT_pitch_slide_ofs
-		ld e,b
-		ld d,0
-		add ix,de
-		add ix,de
-		ld e,(ix+0)
-		ld d,(ix+1)
-		ex hl,de
-
-		; Load pitch offset in de
-		ld ix,SSGCNT_pitch_ofs
-		ld e,b
-		ld d,0
-		add ix,de
-		add ix,de
-		ld e,(ix+0)
-		ld d,(ix+1)
-
-		; Add together pitch offset and pitch slide, 
-		; then store everything back into WRAM
-		add hl,de
-		ex hl,de
-		ld (ix+0),e
-		ld (ix+1),d
-	pop hl
-	pop de
-	pop ix
+	ld e,(hl)
+	inc hl
+	ld d,(hl)
 	ret
 
 ; b: channel (0~2)
@@ -567,25 +408,15 @@ SSGCNT_set_noise_tune:
 	ret
 
 ; a: channel
-SSGCNT_set_buffered_note:
-	push hl
-	push de
-		ld hl,SSGCNT_buffered_note
-		ld e,a
-		ld d,0
-		add hl,de
-		ld c,(hl)
-	pop de
-	pop hl
-	; this then goes to SSGCNT_set_note...
-
-; a: channel
 ; c: note
-; Also resets any pitch offset modified by a pitch slide
+; A new note restarts from its own pitch: the slide and macro
+; offsets go back to 0. A pitch slide keeps going, a slide
+; towards a note stops.
 SSGCNT_set_note:
 	push bc
 	push hl
 	push af
+	push ix
 		ld b,a ; \
 		ld a,c ; | Swap a and c
 		ld c,b ; /
@@ -596,36 +427,37 @@ SSGCNT_set_note:
 		add hl,bc
 		ld (hl),a
 
-		; Set buffered note
-		ld hl,SSGCNT_buffered_note
-		add hl,bc
-		ld (hl),a
-
 		; Reset pitch offset
 		ld hl,SSGCNT_pitch_ofs
 		add hl,bc
 		add hl,bc
-		ld (hl),0
+		ld (hl),b
 		inc hl
-		ld (hl),0
+		ld (hl),b
+
+		; The volume macro starts again
+		ld hl,SSGCNT_vol_raw
+		add hl,bc
+		ld (hl),b
+
+		ld a,c
+		add a,a
+		add a,a
+		add a,a
+		add a,c
+		ld c,a
+		ld ix,SSGCNT_slides
+		add ix,bc
+		ld (ix+SLIDE.acc+0),b
+		ld (ix+SLIDE.acc+1),b
+		bit 1,(ix+SLIDE.flags)
+		jr z,keep_slide$
+		ld (ix+SLIDE.flags),b
+keep_slide$:
+	pop ix
 	pop af
 	pop hl
 	pop bc
-	ret
-
-; [INPUT]
-;   l: note
-; [OUTPUT]
-;   de: pitch
-; DOESN'T BACKUP REGISTER HL
-SSGCNT_get_pitch_from_note:
-	ld h,0
-	ld de,SSGCNT_note_LUT
-	add hl,hl
-	add hl,de
-	ld e,(hl)
-	inc hl
-	ld d,(hl)
 	ret
 
 ; e: flag type to set/clear (SSGCNT_MIX_EN_TUNE = 0; SSGCNT_MIX_EN_NOISE = 3)

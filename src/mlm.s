@@ -748,6 +748,22 @@ set_fm_instrument$:
 	push af
 	push ix
 		sub a,MLM_CH_FM1
+
+		; The patch already in the chip is not loaded again
+		push hl
+			ld e,(hl)
+			inc e
+			ld c,a
+			ld b,0
+			ld hl,FM_loaded_instruments
+			add hl,bc
+			ld a,(hl)
+			ld (hl),e
+			cp a,e
+			ld a,c
+		pop hl
+		jr z,fm_instrument_done$
+
 		push af
 			; Calculate address to
 			; FM_Channel struct
@@ -823,6 +839,7 @@ set_fm_instrument$:
 		ld a,(ix+FM_Channel.enable)
 		or a,FMCNT_VOL_UPDATE
 		ld (ix+FM_Channel.enable),a
+fm_instrument_done$:
 	pop ix
 	pop af
 	pop bc
@@ -1066,7 +1083,35 @@ skip_mvol_calculation$:
 		ld hl,SSGCNT_volumes-MLM_CH_SSG1
 		ld b,0
 		add hl,bc
+		cp a,(hl)
 		ld (hl),a
+		jr z,vol_same$
+
+		; A volume change once the volume macro has ended
+		; replaces the macro until the next note (DefleMask)
+		push ix
+			ld a,c
+			sub a,MLM_CH_SSG1
+			ld l,a
+			add a,a
+			add a,a
+			add a,a
+			ld c,a
+			ld ix,SSGCNT_vol_macro_A
+			add ix,bc
+			ld c,l
+			ld a,(ix+ControlMacro.enable)
+			or a,a
+			jr z,vol_raw_done$
+			ld a,(ix+ControlMacro.curr_pt)
+			cp a,(ix+ControlMacro.length)
+			jr nz,vol_raw_done$
+			ld hl,SSGCNT_vol_raw
+			add hl,bc
+			ld (hl),1
+vol_raw_done$:
+		pop ix
+vol_same$:
 	pop iy
 	pop af
 	pop bc

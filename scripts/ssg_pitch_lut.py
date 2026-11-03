@@ -2,9 +2,10 @@
 ###### Made by GbaCretin ######
 ###############################
 
-# LUT from C2 to B7 (for SSG OPNBs)
+# LUT from C1 to B7 (for SSG OPNBs); C1 is the lowest
+# note whose period still fits the 12-bit register
 
-number_of_octaves = 6
+number_of_octaves = 7
 base_pitches = [
 #   C2     C#2    D2     D#2    E2     F2
 	65.41, 69.30, 73.42, 77.78, 82.41, 87.31,
@@ -13,7 +14,7 @@ base_pitches = [
     
 LUT = bytearray()
 
-for octave in range(1, number_of_octaves+1):
+for octave in range(0, number_of_octaves):
 	for base_pitch in base_pitches:
 		pitch = base_pitch * pow(2,octave)
 		SSG_pitch = round(250000 / pitch)
