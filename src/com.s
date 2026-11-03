@@ -212,7 +212,8 @@ UCOM_command_vectors:
     dw UCOM_CMD_set_fade,          UCOM_CMD_set_fade
     dw UCOM_CMD_invalid,           UCOM_CMD_sfxps_retrig_smp
     dw UCOM_CMD_pause_song,        UCOM_CMD_resume_song      ; 0x0C, 0x0D
-    dup 18  ; pad 0x0E..0x1F (table sized to UCOM_COMMAND_MASK = 0x1F)
+    dw UCOM_CMD_sfxps_play_smp_hi, UCOM_CMD_sfxps_retrig_smp_hi ; 0x0E, 0x0F
+    dup 16  ; pad 0x10..0x1F (table sized to UCOM_COMMAND_MASK = 0x1F)
         dw UCOM_CMD_invalid
     edup
 

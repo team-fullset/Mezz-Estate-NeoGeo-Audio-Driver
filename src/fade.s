@@ -77,3 +77,15 @@ solve_overflow$:
     ld (FADE_offset),a
     dec a ; a becomes 255
     jp check_end$
+
+; UCOM $0E/$0F live here, after all other code, so adding them moved nothing.
+; Samples 128..254: the parameter byte only carries 7 bits.
+; b: %0SSSSSSS (sample $80+S)
+UCOM_CMD_sfxps_play_smp_hi:
+    set 7,b
+    jp UCOM_CMD_sfxps_play_smp
+
+; b: %0SSSSSSS (sample $80+S)
+UCOM_CMD_sfxps_retrig_smp_hi:
+    set 7,b
+    jp UCOM_CMD_sfxps_retrig_smp
