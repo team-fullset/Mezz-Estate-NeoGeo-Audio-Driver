@@ -89,3 +89,14 @@ UCOM_CMD_sfxps_play_smp_hi:
 UCOM_CMD_sfxps_retrig_smp_hi:
     set 7,b
     jp UCOM_CMD_sfxps_retrig_smp
+
+; The chip's ADPCM-A master level (music and SFX), as Knight's Chance's
+; original driver changes it. A song's own master volume command overrides it.
+; b: %00VVVVVV
+UCOM_CMD_set_pa_master_vol:
+    push de
+        ld d,REG_PA_MVOL
+        ld e,b
+        rst RST_YM_WRITEB
+    pop de
+    jp UCOM_run_command_return
