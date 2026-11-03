@@ -659,10 +659,14 @@ MLM_ch_parameters_init:
 		ld c,PANNING_CENTER
 		call MLM_set_channel_panning
 
-		ld a,0
+		; Instrument 0 can be an FM instrument, so SSG
+		; channels keep the cleared state until the song sets one.
 		ld c,b
 		dec c
-		call MLM_set_instrument
+		ld a,c
+		cp a,MLM_CH_SSG1
+		ld a,0
+		call c,MLM_set_instrument
 
 		ld a,$FF
 		call MLM_set_channel_volume
