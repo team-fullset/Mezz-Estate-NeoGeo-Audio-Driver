@@ -100,3 +100,115 @@ UCOM_CMD_set_pa_master_vol:
         rst RST_YM_WRITEB
     pop de
     jp UCOM_run_command_return
+
+; b: %0DDDDDDD, shifted into com_raw_addr from the bottom.
+;   Five pushes carry (end << 16) | start, both in 256-byte units.
+UCOM_CMD_raw_push:
+    push af
+    push bc
+    push hl
+        ld c,7
+loop$:
+        ld hl,com_raw_addr
+        sla (hl)
+        inc hl
+        rl (hl)
+        inc hl
+        rl (hl)
+        inc hl
+        rl (hl)
+        dec c
+        jr nz,loop$
+        ld hl,com_raw_addr
+        ld a,(hl)
+        or a,b
+        ld (hl),a
+    pop hl
+    pop bc
+    pop af
+    jp UCOM_run_command_return
+
+; b: %0B000XXX
+;   B=0: ADPCM-A on channel XXX (6, 7: all six) at full volume, both sides
+;   B=1: ADPCM-B at pitch XXX, delta-N ($44 + XXX * 8) << 8
+;   The range is the last five raw pushes.
+UCOM_CMD_raw_play:
+    push af
+    push bc
+    push de
+    push ix
+        ld ix,com_raw_addr
+        bit 6,b
+        jr nz,adpcm_b$
+
+        ld a,b
+        and a,7
+        cp a,6
+        jr c,one_channel$
+        ld b,0
+all_channels$:
+        ld a,b
+        call raw_play_pa$
+        inc b
+        ld a,b
+        cp a,6
+        jr nz,all_channels$
+        jr return$
+one_channel$:
+        call raw_play_pa$
+        jr return$
+
+adpcm_b$:
+        ld de,REG_PB_CTRL<<8 | $01
+        rst RST_YM_WRITEA
+        ld de,REG_PB_VOL<<8 | $FF
+        rst RST_YM_WRITEA
+        ld de,REG_PB_LRSEL<<8 | $C0
+        rst RST_YM_WRITEA
+        ld de,REG_PB_FREQL<<8 | $00
+        rst RST_YM_WRITEA
+        ld a,b
+        and a,7
+        sla a
+        sla a
+        sla a
+        add a,$44
+        ld d,REG_PB_FREQH
+        ld e,a
+        rst RST_YM_WRITEA
+        ld d,REG_PB_STARTL
+        ld e,(ix+0)
+        rst RST_YM_WRITEA
+        ld d,REG_PB_STARTH
+        ld e,(ix+1)
+        rst RST_YM_WRITEA
+        ld d,REG_PB_ENDL
+        ld e,(ix+2)
+        rst RST_YM_WRITEA
+        ld d,REG_PB_ENDH
+        ld e,(ix+3)
+        rst RST_YM_WRITEA
+        ld de,REG_PB_CTRL<<8 | $80
+        rst RST_YM_WRITEA
+return$:
+    pop ix
+    pop de
+    pop bc
+    pop af
+    jp UCOM_run_command_return
+
+; a: ADPCM-A channel
+raw_play_pa$:
+    push bc
+        call PA_set_sample_addr
+        ld c,192
+        call PA_set_channel_panning
+        ld c,a
+        push af
+            ld a,$1F
+            call PA_set_channel_volume
+        pop af
+        ld e,a
+        call PA_play_sample
+    pop bc
+    ret

@@ -110,3 +110,6 @@ FADE_offset: ds 1 ; s8
 ; 2 = resuming (fading the music back in to pause_saved_mvol)
 pause_flag:        ds 1 ; u8
 pause_saved_mvol:  ds 1 ; u8 (master_volume captured at pause; fade-in target on resume)
+
+; ======== UCOM raw play ========
+com_raw_addr: ds 4 ; u8[4] start L/H, end L/H, shifted in 7 bits at a time
